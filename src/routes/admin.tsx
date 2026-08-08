@@ -15,7 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
-import { adminBootstrapStatus, bootstrapAdmin } from "@/lib/admin.functions";
+import { adminBootstrapStatus } from "@/lib/admin.functions";
 
 export const Route = createFileRoute("/admin")({
   head: () => ({
@@ -110,20 +110,44 @@ function AdminLogin() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [confirmSent, setConfirmSent] = useState(false);
   const status = useQuery({ queryKey: ["admin-bootstrap"], queryFn: () => adminBootstrapStatus() });
   const needsSetup = status.data?.needsSetup;
 
   const submit = useMutation({
     mutationFn: async () => {
-      if (needsSetup) {
-        const res = await bootstrapAdmin({ data: { email: email.trim(), password } });
-        if (res.status === "error") throw new Error(res.message ?? "שגיאה");
-      }
-      const { error: err } = await supabase.auth.signInWithPassword({
+      // Always try signing in first — the email may already have a
+      // confirmed Supabase Auth account (e.g. from earlier testing) even
+      // though no admin role is assigned yet.
+      const { error: signInError } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
-      if (err) throw err;
+      if (!signInError) {
+        // Harmless no-op once an admin already exists; only succeeds the
+        // very first time this account signs in while none exists yet.
+        await supabase.rpc("bootstrap_first_admin");
+        return { pendingConfirmation: false as const };
+      }
+
+      if (!needsSetup) throw signInError;
+
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+      });
+      if (signUpError) throw signUpError;
+      if (!signUpData.session) {
+        return { pendingConfirmation: true as const };
+      }
+      await supabase.rpc("bootstrap_first_admin");
+      return { pendingConfirmation: false as const };
+    },
+    onSuccess: (res) => {
+      if (res.pendingConfirmation) {
+        setConfirmSent(true);
+        toast.success("נשלח מייל אימות — יש לאשר ואז להתחבר");
+      }
     },
     onError: () => setError("פרטי ההתחברות שגויים או שאירעה שגיאה"),
   });
@@ -137,43 +161,64 @@ function AdminLogin() {
             ? "הגדרת חשבון המנהל הראשון במערכת"
             : "התחברות עם דוא״ל וסיסמה לניהול המערכת"}
         </p>
-        <form
-          className="mt-5 space-y-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            setError(null);
-            submit.mutate();
-          }}
-        >
-          <div className="space-y-1.5">
-            <Label>דוא״ל</Label>
-            <Input
-              type="email"
-              dir="ltr"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="h-12"
-              required
-            />
+
+        {confirmSent ? (
+          <div className="mt-5 space-y-3">
+            <p className="rounded-lg bg-warning-soft p-3 text-sm text-warning-foreground">
+              נשלח מייל אימות לכתובת {email}. יש ללחוץ על הקישור במייל ולאחר מכן להתחבר כאן עם
+              אותם פרטים.
+            </p>
+            <Button
+              variant="outline"
+              className="h-12 w-full"
+              onClick={() => {
+                setConfirmSent(false);
+                status.refetch();
+              }}
+            >
+              חזרה למסך ההתחברות
+            </Button>
           </div>
-          <div className="space-y-1.5">
-            <Label>סיסמה</Label>
-            <Input
-              type="password"
-              dir="ltr"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="h-12"
-              required
-              minLength={8}
-            />
-          </div>
-          {error && <p className="rounded-lg bg-danger-soft p-2 text-sm text-danger">{error}</p>}
-          <Button type="submit" className="h-12 w-full text-base" disabled={submit.isPending}>
-            {submit.isPending && <Loader2 className="ml-2 h-4 w-4 animate-spin" />}
-            {needsSetup ? "יצירת חשבון מנהל" : "כניסה"}
-          </Button>
-        </form>
+        ) : (
+          <form
+            className="mt-5 space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              setError(null);
+              submit.mutate();
+            }}
+          >
+            <div className="space-y-1.5">
+              <Label>דוא״ל</Label>
+              <Input
+                type="email"
+                dir="ltr"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="h-12"
+                required
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>סיסמה</Label>
+              <Input
+                type="password"
+                dir="ltr"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="h-12"
+                required
+                minLength={8}
+              />
+            </div>
+            {error && <p className="rounded-lg bg-danger-soft p-2 text-sm text-danger">{error}</p>}
+            <Button type="submit" className="h-12 w-full text-base" disabled={submit.isPending}>
+              {submit.isPending && <Loader2 className="ml-2 h-4 w-4 animate-spin" />}
+              {needsSetup ? "יצירת חשבון מנהל" : "כניסה"}
+            </Button>
+          </form>
+        )}
+
         <Link to="/" className="mt-4 block text-center text-sm text-primary underline">
           חזרה לאזור העובדים
         </Link>

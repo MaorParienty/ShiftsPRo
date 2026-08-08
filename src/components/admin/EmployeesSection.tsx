@@ -26,13 +26,21 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
-import { employeeQueue, employeeShiftHistory, listEmployees, updateEmployee } from "@/lib/admin.functions";
+import {
+  deleteEmployee,
+  employeeQueue,
+  employeeShiftHistory,
+  listEmployees,
+  updateEmployee,
+} from "@/lib/admin.functions";
+import { durationHours, formatDuration, formatHeDate, trimTime } from "@/lib/time";
 
 export function EmployeesSection() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<any | null>(null);
   const [viewingQueue, setViewingQueue] = useState<any | null>(null);
   const [viewingHistory, setViewingHistory] = useState<any | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
 
   const employees = useQuery({ queryKey: ["employees"], queryFn: () => listEmployees() });
 
@@ -49,6 +57,20 @@ export function EmployeesSection() {
         refresh();
       } else {
         toast.error("עדכון העובד נכשל");
+      }
+    },
+    onError: () => toast.error("אירעה שגיאה"),
+  });
+
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteEmployee({ data: { id } }),
+    onSuccess: (res) => {
+      if (res.status === "ok") {
+        toast.success("העובד נמחק");
+        setDeleteTarget(null);
+        refresh();
+      } else {
+        toast.error("מחיקת העובד נכשלה");
       }
     },
     onError: () => toast.error("אירעה שגיאה"),
@@ -86,6 +108,7 @@ export function EmployeesSection() {
                   onEdit={() => setEditing(emp)}
                   onViewQueue={() => setViewingQueue(emp)}
                   onViewHistory={() => setViewingHistory(emp)}
+                  onDelete={() => setDeleteTarget(emp)}
                 />
               ))}
             </div>
@@ -111,6 +134,27 @@ export function EmployeesSection() {
         open={!!viewingHistory}
         onOpenChange={(open) => !open && setViewingHistory(null)}
       />
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
+        <AlertDialogContent className="text-right">
+          <AlertDialogHeader>
+            <AlertDialogTitle>מחיקת עובד</AlertDialogTitle>
+            <AlertDialogDescription>
+              האם למחוק את {deleteTarget?.first_name} {deleteTarget?.last_name}? פעולה זו תמחק גם
+              את כל ההרשמות למשמרות, השעות והפרוייקטים המשויכים לעובד זה, ולא ניתן לבטל אותה.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex-row-reverse gap-2 sm:flex-row-reverse">
+            <AlertDialogAction
+              className="bg-danger text-danger-foreground hover:bg-danger/90"
+              onClick={() => deleteTarget && remove.mutate(deleteTarget.id)}
+            >
+              מחיקה
+            </AlertDialogAction>
+            <AlertDialogCancel>ביטול</AlertDialogCancel>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -120,11 +164,13 @@ function EmployeeCard({
   onEdit,
   onViewQueue,
   onViewHistory,
+  onDelete,
 }: {
   employee: any;
   onEdit: () => void;
   onViewQueue: () => void;
   onViewHistory: () => void;
+  onDelete: () => void;
 }) {
   return (
     <div className="rounded-xl border bg-card p-4">
@@ -138,6 +184,9 @@ function EmployeeCard({
         <div className="flex shrink-0 gap-1">
           <Button variant="ghost" size="icon" aria-label="עריכה" onClick={onEdit}>
             <Pencil className="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="icon" aria-label="מחיקת עובד" onClick={onDelete}>
+            <UserX className="h-4 w-4 text-danger" />
           </Button>
         </div>
       </div>
@@ -321,8 +370,6 @@ function EmployeeHistoryDialog({
     queryFn: () => employeeShiftHistory({ data: { employeeId: employee.id } }),
     enabled: !!employee,
   });
-
-  const { formatHeDate, trimTime, durationHours, formatDuration } = require("@/lib/time");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

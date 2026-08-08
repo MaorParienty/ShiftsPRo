@@ -4,8 +4,14 @@ import { z } from "zod";
 import { isValidIsraeliPhone, monthRange, normalizePhone } from "./time";
 
 async function db() {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  return supabaseAdmin as any;
+  const { supabasePublic } = await import("@/integrations/supabase/client.public-server");
+  return supabasePublic as any;
+}
+
+function rpcSecret(): string {
+  const v = process.env["SUPABASE_RPC_SECRET"];
+  if (!v) throw new Error("Missing SUPABASE_RPC_SECRET environment variable.");
+  return v;
 }
 
 export type EmployeeSession = {
@@ -21,58 +27,82 @@ export const getEmployeeSession = createServerFn({ method: "GET" }).handler(
     const id = readEmployeeId();
     if (!id) return null;
     const supabase = await db();
-    const { data } = await supabase
-      .from("employees")
-      .select("id, first_name, last_name, phone")
-      .eq("id", id)
-      .maybeSingle();
-    return data ?? null;
+    const { data } = await supabase.rpc("employee_get_by_id", {
+      _secret: rpcSecret(),
+      _employee_id: id,
+    });
+    return (data as EmployeeSession) ?? null;
   },
 );
 
-export const employeeLogin = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) =>
+export const employeeRegister = createServerFn({ method: "POST" })
+  .validator((input: unknown) =>
     z
       .object({
         firstName: z.string().trim().min(1).max(60),
         lastName: z.string().trim().min(1).max(60),
         phone: z.string().trim().min(1).max(20),
+        password: z.string().min(6).max(72),
       })
       .parse(input),
   )
-  .handler(async ({ data }) => {
-    if (!isValidIsraeliPhone(data.phone)) {
+  .handler(async ({ data: input }) => {
+    if (!isValidIsraeliPhone(input.phone)) {
       return { status: "invalid_phone" as const };
     }
-    const phone = normalizePhone(data.phone);
-    const first = data.firstName.trim();
-    const last = data.lastName.trim();
+    const phone = normalizePhone(input.phone);
+    const first = input.firstName.trim();
+    const last = input.lastName.trim();
     const supabase = await db();
     const { setEmployeeCookie } = await import("./session.server");
+    const { hashPassword } = await import("./password.server");
 
-    const { data: matches } = await supabase
-      .from("employees")
-      .select("id, first_name, last_name, phone")
-      .ilike("first_name", first)
-      .ilike("last_name", last);
+    const { data: result, error } = await supabase.rpc("employee_register", {
+      _secret: rpcSecret(),
+      _first_name: first,
+      _last_name: last,
+      _phone: phone,
+      _password_hash: hashPassword(input.password),
+    });
+    if (error || !result) return { status: "error" as const };
+    const parsed = result as { status: string; employee?: EmployeeSession };
+    if (parsed.status === "exists") return { status: "exists" as const };
+    if (parsed.status !== "ok" || !parsed.employee) return { status: "error" as const };
+    setEmployeeCookie(parsed.employee.id);
+    return { status: "ok" as const, employee: parsed.employee };
+  });
 
-    const existing = (matches ?? [])[0];
-    if (existing) {
-      if (normalizePhone(existing.phone) !== phone) {
-        return { status: "phone_mismatch" as const };
-      }
-      setEmployeeCookie(existing.id);
-      return { status: "ok" as const, employee: existing };
-    }
+export const employeeLogin = createServerFn({ method: "POST" })
+  .validator((input: unknown) =>
+    z
+      .object({
+        firstName: z.string().trim().min(1).max(60),
+        lastName: z.string().trim().min(1).max(60),
+        password: z.string().min(1).max(72),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data: input }) => {
+    const first = input.firstName.trim();
+    const last = input.lastName.trim();
+    const supabase = await db();
+    const { setEmployeeCookie } = await import("./session.server");
+    const { verifyPassword } = await import("./password.server");
 
-    const { data: created, error } = await supabase
-      .from("employees")
-      .insert({ first_name: first, last_name: last, phone })
-      .select("id, first_name, last_name, phone")
-      .single();
-    if (error || !created) return { status: "error" as const };
-    setEmployeeCookie(created.id);
-    return { status: "ok" as const, employee: created, isNew: true };
+    const { data: rows } = await supabase.rpc("employee_find_candidates", {
+      _secret: rpcSecret(),
+      _first_name: first,
+      _last_name: last,
+    });
+    const candidates = (rows as any[]) ?? [];
+    if (!candidates.length) return { status: "not_found" as const };
+
+    const match = candidates.find((c: any) => verifyPassword(input.password, c.password_hash));
+    if (!match) return { status: "wrong_password" as const };
+
+    setEmployeeCookie(match.id);
+    const { password_hash: _omit, ...employee } = match;
+    return { status: "ok" as const, employee: employee as EmployeeSession };
   });
 
 export const employeeLogout = createServerFn({ method: "POST" }).handler(async () => {
@@ -82,7 +112,7 @@ export const employeeLogout = createServerFn({ method: "POST" }).handler(async (
 });
 
 export const getMonthOverview = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ year: z.number().int(), month: z.number().int().min(1).max(12) }).parse(input),
   )
   .handler(async ({ data }) => {
@@ -91,15 +121,18 @@ export const getMonthOverview = createServerFn({ method: "POST" })
     const supabase = await db();
     const { start, end } = monthRange(data.year, data.month);
 
-    const { data: shifts } = await supabase
-      .from("shifts")
-      .select("id, shift_date, min_people, max_people")
-      .gte("shift_date", start)
-      .lte("shift_date", end);
+    const { data: shifts } = await supabase.rpc("employee_select_shifts_range", {
+      _secret: rpcSecret(),
+      _start: start,
+      _end: end,
+    });
 
     const ids = (shifts ?? []).map((s: any) => s.id);
     const { data: signups } = ids.length
-      ? await supabase.from("shift_signups").select("shift_id, employee_id").in("shift_id", ids)
+      ? await supabase.rpc("employee_select_signups_by_shift_ids", {
+          _secret: rpcSecret(),
+          _shift_ids: ids,
+        })
       : { data: [] as any[] };
 
     const days: Record<
@@ -137,7 +170,7 @@ type DayShift = {
 };
 
 export const getDayShifts = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).parse(input),
   )
   .handler(async ({ data }): Promise<{ shifts: DayShift[] }> => {
@@ -145,142 +178,137 @@ export const getDayShifts = createServerFn({ method: "POST" })
     const employeeId = readEmployeeId();
     const supabase = await db();
 
-    const { data: shifts } = await supabase
-      .from("shifts")
-      .select("id, shift_date, start_time, end_time, min_people, max_people")
-      .eq("shift_date", data.date)
-      .order("start_time");
+    const { data: shifts } = await supabase.rpc("employee_select_shifts_by_date", {
+      _secret: rpcSecret(),
+      _date: data.date,
+    });
 
     const ids = (shifts ?? []).map((s: any) => s.id);
     if (!ids.length) return { shifts: [] };
 
-    const { data: signups } = await supabase
-      .from("shift_signups")
-      .select("shift_id, employee_id, start_actual_ts, end_actual_ts, note")
-      .in("shift_id", ids);
+    const { data: signups } = await supabase.rpc("employee_select_signups_by_shift_ids", {
+      _secret: rpcSecret(),
+      _shift_ids: ids,
+    });
 
-    const { data: shiftRules } = await supabase
-      .from("shift_conflict_rules")
-      .select("shift_id, conflict_rules(employee_id_a, employee_id_b)")
-      .in("shift_id", ids);
+    const { data: shiftRules } = await supabase.rpc("employee_select_shift_conflict_rules", {
+      _secret: rpcSecret(),
+      _shift_ids: ids,
+    });
 
     const now = Date.now();
-    const result: DayShift[] = (shifts ?? []).map((s: any) => {
-      const rows = (signups ?? []).filter((x: any) => x.shift_id === s.id);
-      const mine = employeeId ? rows.find((x: any) => x.employee_id === employeeId) : null;
-      const rules = (shiftRules ?? [])
-        .filter((r: any) => r.shift_id === s.id)
-        .map((r: any) => r.conflict_rules)
-        .filter(Boolean);
-      const blocked =
-        !!employeeId &&
-        !mine &&
-        rules.some((rule: any) =>
-          rows.some(
-            (row: any) =>
-              (rule.employee_id_a === employeeId && rule.employee_id_b === row.employee_id) ||
-              (rule.employee_id_b === employeeId && rule.employee_id_a === row.employee_id),
-          ),
-        );
-      const startTs = new Date(`${s.shift_date}T${s.start_time}+02:00`).getTime();
-      return {
-        id: s.id,
-        shift_date: s.shift_date,
-        start_time: s.start_time,
-        end_time: s.end_time,
-        min_people: s.min_people,
-        max_people: s.max_people,
-        taken: rows.length,
-        signedUp: !!mine,
-        blocked,
-        past: startTs <= now,
-        started: !!mine?.start_actual_ts,
-        ended: !!mine?.end_actual_ts,
-        start_actual_ts: mine?.start_actual_ts ?? null,
-        end_actual_ts: mine?.end_actual_ts ?? null,
-        note: mine?.note ?? null,
-      };
-    });
+    const result: DayShift[] = (shifts ?? [])
+      .slice()
+      .sort((a: any, b: any) => String(a.start_time).localeCompare(String(b.start_time)))
+      .map((s: any) => {
+        const rows = (signups ?? []).filter((x: any) => x.shift_id === s.id);
+        const mine = employeeId ? rows.find((x: any) => x.employee_id === employeeId) : null;
+        const rules = (shiftRules ?? []).filter((r: any) => r.shift_id === s.id);
+        const blocked =
+          !!employeeId &&
+          !mine &&
+          rules.some(
+            (rule: any) =>
+              rows.some(
+                (row: any) =>
+                  (rule.employee_id_a === employeeId && rule.employee_id_b === row.employee_id) ||
+                  (rule.employee_id_b === employeeId && rule.employee_id_a === row.employee_id),
+              ),
+          );
+        const startTs = new Date(`${s.shift_date}T${s.start_time}+02:00`).getTime();
+        return {
+          id: s.id,
+          shift_date: s.shift_date,
+          start_time: s.start_time,
+          end_time: s.end_time,
+          min_people: s.min_people,
+          max_people: s.max_people,
+          taken: rows.length,
+          signedUp: !!mine,
+          blocked,
+          past: startTs <= now,
+          started: !!mine?.start_actual_ts,
+          ended: !!mine?.end_actual_ts,
+          start_actual_ts: mine?.start_actual_ts ?? null,
+          end_actual_ts: mine?.end_actual_ts ?? null,
+          note: mine?.note ?? null,
+        };
+      });
     return { shifts: result };
   });
 
 export const signupForShift = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => z.object({ shiftId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ shiftId: z.string().uuid() }).parse(input))
   .handler(async ({ data }) => {
     const { requireEmployeeId } = await import("./session.server");
     const employeeId = requireEmployeeId();
     const supabase = await db();
-    const { data: result, error } = await supabase.rpc("signup_for_shift", {
-      _shift_id: data.shiftId,
+    const { data: result, error } = await supabase.rpc("employee_signup_for_shift", {
+      _secret: rpcSecret(),
       _employee_id: employeeId,
-      _override: false,
+      _shift_id: data.shiftId,
     });
     if (error) return { status: "error" as const };
     return { status: result as "ok" | "full" | "conflict" | "past" | "already" | "not_found" };
   });
 
 export const cancelSignup = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => z.object({ shiftId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ shiftId: z.string().uuid() }).parse(input))
   .handler(async ({ data }) => {
     const { requireEmployeeId } = await import("./session.server");
     const employeeId = requireEmployeeId();
     const supabase = await db();
-    const { data: row } = await supabase
-      .from("shift_signups")
-      .select("id, start_actual_ts")
-      .eq("shift_id", data.shiftId)
-      .eq("employee_id", employeeId)
-      .maybeSingle();
-    if (!row) return { status: "not_found" as const };
-    if (row.start_actual_ts) return { status: "started" as const };
-    await supabase.from("shift_signups").delete().eq("id", row.id);
-    return { status: "ok" as const };
+    const { data: result, error } = await supabase.rpc("employee_cancel_signup", {
+      _secret: rpcSecret(),
+      _employee_id: employeeId,
+      _shift_id: data.shiftId,
+    });
+    if (error) return { status: "error" as const };
+    return { status: result as "ok" | "not_found" | "started" };
   });
 
 export const startShift = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => z.object({ shiftId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ shiftId: z.string().uuid() }).parse(input))
   .handler(async ({ data }) => {
     const { requireEmployeeId } = await import("./session.server");
     const employeeId = requireEmployeeId();
     const supabase = await db();
-    const { error } = await supabase
-      .from("shift_signups")
-      .update({ start_actual_ts: new Date().toISOString() })
-      .eq("shift_id", data.shiftId)
-      .eq("employee_id", employeeId)
-      .is("start_actual_ts", null);
+    const { error } = await supabase.rpc("employee_start_shift", {
+      _secret: rpcSecret(),
+      _employee_id: employeeId,
+      _shift_id: data.shiftId,
+    });
     return { status: error ? ("error" as const) : ("ok" as const) };
   });
 
 export const endShift = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) => z.object({ shiftId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ shiftId: z.string().uuid() }).parse(input))
   .handler(async ({ data }) => {
     const { requireEmployeeId } = await import("./session.server");
     const employeeId = requireEmployeeId();
     const supabase = await db();
-    const { error } = await supabase
-      .from("shift_signups")
-      .update({ end_actual_ts: new Date().toISOString() })
-      .eq("shift_id", data.shiftId)
-      .eq("employee_id", employeeId)
-      .not("start_actual_ts", "is", null)
-      .is("end_actual_ts", null);
+    const { error } = await supabase.rpc("employee_end_shift", {
+      _secret: rpcSecret(),
+      _employee_id: employeeId,
+      _shift_id: data.shiftId,
+    });
     return { status: error ? ("error" as const) : ("ok" as const) };
   });
 
 export const saveShiftNote = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ shiftId: z.string().uuid(), note: z.string().max(1000) }).parse(input),
   )
   .handler(async ({ data }) => {
     const { requireEmployeeId } = await import("./session.server");
     const employeeId = requireEmployeeId();
     const supabase = await db();
-    const { error } = await supabase
-      .from("shift_signups")
-      .update({ note: data.note.trim() || null, note_updated_at: new Date().toISOString() })
-      .eq("shift_id", data.shiftId)
-      .eq("employee_id", employeeId);
+    const { error } = await supabase.rpc("employee_save_note", {
+      _secret: rpcSecret(),
+      _employee_id: employeeId,
+      _shift_id: data.shiftId,
+      _note: data.note,
+    });
     return { status: error ? ("error" as const) : ("ok" as const) };
   });
 
@@ -289,14 +317,11 @@ export const getMyShifts = createServerFn({ method: "GET" }).handler(async () =>
   const employeeId = readEmployeeId();
   if (!employeeId) return { shifts: [] as any[] };
   const supabase = await db();
-  const { data } = await supabase
-    .from("shift_signups")
-    .select(
-      "id, start_actual_ts, end_actual_ts, note, note_updated_at, shifts(id, shift_date, start_time, end_time)",
-    )
-    .eq("employee_id", employeeId)
-    .order("created_at", { ascending: false });
-  const rows = (data ?? []).filter((r: any) => r.shifts);
+  const { data } = await supabase.rpc("employee_select_my_shifts", {
+    _secret: rpcSecret(),
+    _employee_id: employeeId,
+  });
+  const rows = ((data as any[]) ?? []).filter((r: any) => r.shifts);
   rows.sort((a: any, b: any) =>
     a.shifts.shift_date < b.shifts.shift_date
       ? 1
@@ -312,12 +337,11 @@ export const getMyProjects = createServerFn({ method: "GET" }).handler(async () 
   const employeeId = readEmployeeId();
   if (!employeeId) return { current: null as any, completed: [] as any[] };
   const supabase = await db();
-  const { data } = await supabase
-    .from("employee_projects")
-    .select("id, order_index, status, completed_at, projects(id, name, description)")
-    .eq("employee_id", employeeId)
-    .order("order_index");
-  const rows = data ?? [];
+  const { data } = await supabase.rpc("employee_select_my_projects", {
+    _secret: rpcSecret(),
+    _employee_id: employeeId,
+  });
+  const rows = (data as any[]) ?? [];
   return {
     current: rows.find((r: any) => r.status === "assigned") ?? null,
     completed: rows
@@ -327,18 +351,17 @@ export const getMyProjects = createServerFn({ method: "GET" }).handler(async () 
 });
 
 export const completeCurrentProject = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ employeeProjectId: z.string().uuid() }).parse(input),
   )
   .handler(async ({ data }) => {
     const { requireEmployeeId } = await import("./session.server");
     const employeeId = requireEmployeeId();
     const supabase = await db();
-    const { error } = await supabase
-      .from("employee_projects")
-      .update({ status: "completed", completed_at: new Date().toISOString() })
-      .eq("id", data.employeeProjectId)
-      .eq("employee_id", employeeId)
-      .eq("status", "assigned");
+    const { error } = await supabase.rpc("employee_complete_project", {
+      _secret: rpcSecret(),
+      _employee_id: employeeId,
+      _employee_project_id: data.employeeProjectId,
+    });
     return { status: error ? ("error" as const) : ("ok" as const) };
   });

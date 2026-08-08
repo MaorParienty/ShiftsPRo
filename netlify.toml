@@ -1,8 +1,10 @@
 [build]
   command = "bun run build"
-  publish = ".output/public"
+  publish = "dist"
 
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
+# No manual redirects needed: Nitro's netlify preset auto-detects the Netlify
+# build environment and generates its own server function (in
+# .netlify/functions-internal), which Netlify's build system wires up to
+# handle SSR pages and /_serverFn/* RPC calls automatically. A blanket
+# "/* -> /index.html" redirect would break that by serving the static shell
+# for every request instead of routing through the function.

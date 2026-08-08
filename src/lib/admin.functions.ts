@@ -4,18 +4,16 @@ import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { monthRange } from "./time";
 
-async function db() {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  return supabaseAdmin as any;
-}
-
+// Admin operations run through the admin's own authenticated Supabase session
+// (attached by requireSupabaseAuth), relying on the "admins manage X" RLS
+// policies already defined in the schema — no service-role key needed.
 async function assertAdmin(context: any) {
   const { data, error } = await context.supabase.rpc("has_role", {
     _user_id: context.userId,
     _role: "admin",
   });
   if (error || !data) throw new Error("FORBIDDEN");
-  return await db();
+  return context.supabase;
 }
 
 /* ---------------------------------- auth ---------------------------------- */
@@ -34,7 +32,7 @@ export const getAdminSelf = createServerFn({ method: "GET" })
 
 export const adminMonthShifts = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ year: z.number().int(), month: z.number().int().min(1).max(12) }).parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -77,7 +75,7 @@ export const adminMonthShifts = createServerFn({ method: "POST" })
 
 export const adminDayDetail = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -119,7 +117,7 @@ const shiftInput = z.object({
 
 export const createShift = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => shiftInput.parse(input))
+  .validator((input: unknown) => shiftInput.parse(input))
   .handler(async ({ data, context }) => {
     const supabase = await assertAdmin(context);
     if (data.max_people < data.min_people) return { status: "invalid" as const };
@@ -145,7 +143,7 @@ export const createShift = createServerFn({ method: "POST" })
 
 export const updateShift = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => shiftInput.extend({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => shiftInput.extend({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const supabase = await assertAdmin(context);
     if (data.max_people < data.min_people) return { status: "invalid" as const };
@@ -171,7 +169,7 @@ export const updateShift = createServerFn({ method: "POST" })
 
 export const deleteShift = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const supabase = await assertAdmin(context);
     const { error } = await supabase.from("shifts").delete().eq("id", data.id);
@@ -180,7 +178,7 @@ export const deleteShift = createServerFn({ method: "POST" })
 
 export const duplicateShift = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         id: z.string().uuid(),
@@ -223,7 +221,7 @@ export const duplicateShift = createServerFn({ method: "POST" })
 
 export const adminAddSignup = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         shiftId: z.string().uuid(),
@@ -245,7 +243,7 @@ export const adminAddSignup = createServerFn({ method: "POST" })
 
 export const adminRemoveSignup = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ signupId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ signupId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const supabase = await assertAdmin(context);
     const { error } = await supabase.from("shift_signups").delete().eq("id", data.signupId);
@@ -254,7 +252,7 @@ export const adminRemoveSignup = createServerFn({ method: "POST" })
 
 export const adminUpdateSignupTimes = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         signupId: z.string().uuid(),
@@ -292,7 +290,7 @@ export const listConflictRules = createServerFn({ method: "GET" })
 
 export const createConflictRule = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ a: z.string().uuid(), b: z.string().uuid() }).parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -307,7 +305,7 @@ export const createConflictRule = createServerFn({ method: "POST" })
 
 export const deleteConflictRule = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const supabase = await assertAdmin(context);
     const { error } = await supabase.from("conflict_rules").delete().eq("id", data.id);
@@ -354,7 +352,7 @@ export const listEmployees = createServerFn({ method: "GET" })
 
 export const updateEmployee = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         id: z.string().uuid(),
@@ -379,7 +377,7 @@ export const updateEmployee = createServerFn({ method: "POST" })
 
 export const deleteEmployee = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const supabase = await assertAdmin(context);
     const { error } = await supabase.from("employees").delete().eq("id", data.id);
@@ -388,7 +386,7 @@ export const deleteEmployee = createServerFn({ method: "POST" })
 
 export const employeeShiftHistory = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ employeeId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ employeeId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const supabase = await assertAdmin(context);
     const { data: rows } = await supabase
@@ -406,7 +404,7 @@ export const employeeShiftHistory = createServerFn({ method: "POST" })
 
 export const hoursReport = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ year: z.number().int(), month: z.number().int().min(1).max(12) }).parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -421,24 +419,91 @@ export const hoursReport = createServerFn({ method: "POST" })
       .select("employee_id, start_actual_ts, end_actual_ts, shifts!inner(shift_date)")
       .gte("shifts.shift_date", start)
       .lte("shifts.shift_date", end);
+    const { data: adjustments } = await supabase
+      .from("hours_adjustments")
+      .select("employee_id, hours")
+      .eq("year", data.year)
+      .eq("month", data.month);
     return {
       report: (employees ?? []).map((e: any) => {
         const mine = (rows ?? []).filter((r: any) => r.employee_id === e.id);
-        const hours = mine.reduce((acc: number, r: any) => {
+        const computedHours = mine.reduce((acc: number, r: any) => {
           if (!r.start_actual_ts || !r.end_actual_ts) return acc;
           const ms = new Date(r.end_actual_ts).getTime() - new Date(r.start_actual_ts).getTime();
           return acc + Math.max(0, ms) / 3600000;
         }, 0);
+        const adjustmentHours = (adjustments ?? [])
+          .filter((a: any) => a.employee_id === e.id)
+          .reduce((acc: number, a: any) => acc + Number(a.hours), 0);
         return {
           id: e.id,
           name: `${e.first_name} ${e.last_name}`,
-          hours,
+          computedHours,
+          adjustmentHours,
+          hours: computedHours + adjustmentHours,
           completed: mine.filter((r: any) => r.start_actual_ts && r.end_actual_ts).length,
           inProgress: mine.filter((r: any) => r.start_actual_ts && !r.end_actual_ts).length,
           signups: mine.length,
         };
       }),
     };
+  });
+
+export const listHoursAdjustments = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((input: unknown) =>
+    z
+      .object({
+        employeeId: z.string().uuid(),
+        year: z.number().int(),
+        month: z.number().int().min(1).max(12),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const supabase = await assertAdmin(context);
+    const { data: rows } = await supabase
+      .from("hours_adjustments")
+      .select("id, hours, reason, created_at")
+      .eq("employee_id", data.employeeId)
+      .eq("year", data.year)
+      .eq("month", data.month)
+      .order("created_at", { ascending: false });
+    return { adjustments: rows ?? [] };
+  });
+
+export const addHoursAdjustment = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((input: unknown) =>
+    z
+      .object({
+        employeeId: z.string().uuid(),
+        year: z.number().int(),
+        month: z.number().int().min(1).max(12),
+        hours: z.number().refine((n) => n !== 0, "hours must not be zero"),
+        reason: z.string().trim().min(1).max(300),
+      })
+      .parse(input),
+  )
+  .handler(async ({ data, context }) => {
+    const supabase = await assertAdmin(context);
+    const { error } = await supabase.from("hours_adjustments").insert({
+      employee_id: data.employeeId,
+      year: data.year,
+      month: data.month,
+      hours: data.hours,
+      reason: data.reason,
+    });
+    return { status: error ? ("error" as const) : ("ok" as const) };
+  });
+
+export const deleteHoursAdjustment = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .handler(async ({ data, context }) => {
+    const supabase = await assertAdmin(context);
+    const { error } = await supabase.from("hours_adjustments").delete().eq("id", data.id);
+    return { status: error ? ("error" as const) : ("ok" as const) };
   });
 
 /* --------------------------------- projects -------------------------------- */
@@ -456,7 +521,7 @@ export const listProjects = createServerFn({ method: "GET" })
 
 export const createProject = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({ name: z.string().trim().min(1).max(120), description: z.string().max(2000) })
       .parse(input),
@@ -471,7 +536,7 @@ export const createProject = createServerFn({ method: "POST" })
 
 export const updateProject = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         id: z.string().uuid(),
@@ -491,7 +556,7 @@ export const updateProject = createServerFn({ method: "POST" })
 
 export const deleteProject = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const supabase = await assertAdmin(context);
     const { error } = await supabase.from("projects").delete().eq("id", data.id);
@@ -500,7 +565,7 @@ export const deleteProject = createServerFn({ method: "POST" })
 
 export const employeeQueue = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ employeeId: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ employeeId: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const supabase = await assertAdmin(context);
     const { data: rows } = await supabase
@@ -516,7 +581,7 @@ export const employeeQueue = createServerFn({ method: "POST" })
 
 export const assignProject = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ employeeId: z.string().uuid(), projectId: z.string().uuid() }).parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -538,7 +603,7 @@ export const assignProject = createServerFn({ method: "POST" })
 
 export const removeQueueItem = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
+  .validator((input: unknown) => z.object({ id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     const supabase = await assertAdmin(context);
     const { error } = await supabase.from("employee_projects").delete().eq("id", data.id);
@@ -547,7 +612,7 @@ export const removeQueueItem = createServerFn({ method: "POST" })
 
 export const reorderQueue = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z.object({ ids: z.array(z.string().uuid()).min(1) }).parse(input),
   )
   .handler(async ({ data, context }) => {
@@ -562,7 +627,7 @@ export const reorderQueue = createServerFn({ method: "POST" })
 
 export const listNotes = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
+  .validator((input: unknown) =>
     z
       .object({
         employeeId: z.string().uuid().nullable().default(null),
@@ -598,38 +663,10 @@ export const listNotes = createServerFn({ method: "POST" })
 
 /* ------------------------- first-time admin setup -------------------------- */
 
+// Whether any admin exists yet — checked via a SECURITY DEFINER function since
+// the caller isn't signed in yet and RLS would otherwise hide the answer.
 export const adminBootstrapStatus = createServerFn({ method: "GET" }).handler(async () => {
-  const supabase = await db();
-  const { count } = await supabase
-    .from("user_roles")
-    .select("id", { count: "exact", head: true })
-    .eq("role", "admin");
-  return { needsSetup: (count ?? 0) === 0 };
+  const { supabasePublic } = await import("@/integrations/supabase/client.public-server");
+  const { data } = await (supabasePublic as any).rpc("admin_bootstrap_needed");
+  return { needsSetup: !!data };
 });
-
-export const bootstrapAdmin = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) =>
-    z
-      .object({ email: z.string().trim().email(), password: z.string().min(8).max(72) })
-      .parse(input),
-  )
-  .handler(async ({ data }) => {
-    const supabase = await db();
-    const { count } = await supabase
-      .from("user_roles")
-      .select("id", { count: "exact", head: true })
-      .eq("role", "admin");
-    if ((count ?? 0) > 0) return { status: "exists" as const };
-
-    const { data: created, error } = await supabase.auth.admin.createUser({
-      email: data.email,
-      password: data.password,
-      email_confirm: true,
-    });
-    if (error || !created?.user) return { status: "error" as const, message: error?.message };
-    const { error: roleError } = await supabase
-      .from("user_roles")
-      .insert({ user_id: created.user.id, role: "admin" });
-    if (roleError) return { status: "error" as const, message: roleError.message };
-    return { status: "ok" as const };
-  });

@@ -222,18 +222,6 @@ Reuse existing functions from src/lib/admin.functions.ts wherever they already c
 
 Build all sections above completely and correctly in this one pass, including empty states, loading states, and confirmations — do not leave any section as a partial placeholder.
 
-This project was built with [Lovable](https://lovable.dev).
-
-**Live app**: https://shift-squad-he.lovable.app
-
-## Build with Lovable
-
-Continue developing this project in the [Lovable editor](https://lovable.dev/projects/8522926d-2a64-41a0-96f2-bd69d3d4c7d9).
-
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: every change made in Lovable is committed straight to this repository.
-- **Full ownership**: this code is yours. Push to `main` on GitHub and your changes sync back into Lovable, ready for your next prompt.
-
 ## Development
 
 Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
@@ -253,10 +241,12 @@ This project is configured for deployment to Netlify. Follow these steps:
 
 Before deploying, you need to set up the following environment variables in Netlify's Site Settings → Environment Variables:
 
-- `VITE_SUPABASE_URL` - Your Supabase project URL (e.g., `https://your-project-id.supabase.co`)
-- `VITE_SUPABASE_PUBLISHABLE_KEY` - Your Supabase anon/public API key
+- `VITE_SUPABASE_URL` / `SUPABASE_URL` - Your Supabase project URL (e.g., `https://your-project-id.supabase.co`)
+- `VITE_SUPABASE_PUBLISHABLE_KEY` / `SUPABASE_PUBLISHABLE_KEY` - Your Supabase anon/public API key
+- `SUPABASE_RPC_SECRET` - Shared secret gating the employee-facing database functions (must match the value inserted into the `_app_secrets` table)
+- `EMPLOYEE_SESSION_SECRET` - Random secret used to sign the employee login cookie
 
-You can find these values in your Supabase project dashboard under Settings → API.
+No service-role key is needed — the app never uses one. Admin operations run through the admin's own Supabase Auth session, and employee operations run through secret-gated database functions (see `supabase/migrations`).
 
 ### Build Configuration
 
