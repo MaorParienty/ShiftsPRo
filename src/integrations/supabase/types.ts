@@ -319,6 +319,10 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: boolean
       }
+      admin_signup_for_shift: {
+        Args: { _employee_id: string; _override?: boolean; _shift_id: string }
+        Returns: string
+      }
       bootstrap_first_admin: {
         Args: Record<PropertyKey, never>
         Returns: boolean

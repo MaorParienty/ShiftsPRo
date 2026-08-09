@@ -164,6 +164,7 @@ type DayShift = {
   past: boolean;
   started: boolean;
   ended: boolean;
+  cancelLocked: boolean;
   start_actual_ts: string | null;
   end_actual_ts: string | null;
   note: string | null;
@@ -229,6 +230,7 @@ export const getDayShifts = createServerFn({ method: "POST" })
           past: startTs <= now,
           started: !!mine?.start_actual_ts,
           ended: !!mine?.end_actual_ts,
+          cancelLocked: startTs - now <= 12 * 3600 * 1000,
           start_actual_ts: mine?.start_actual_ts ?? null,
           end_actual_ts: mine?.end_actual_ts ?? null,
           note: mine?.note ?? null,
@@ -264,7 +266,7 @@ export const cancelSignup = createServerFn({ method: "POST" })
       _shift_id: data.shiftId,
     });
     if (error) return { status: "error" as const };
-    return { status: result as "ok" | "not_found" | "started" };
+    return { status: result as "ok" | "not_found" | "started" | "too_close" };
   });
 
 export const startShift = createServerFn({ method: "POST" })

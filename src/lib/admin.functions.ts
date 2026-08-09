@@ -232,13 +232,13 @@ export const adminAddSignup = createServerFn({ method: "POST" })
   )
   .handler(async ({ data, context }) => {
     const supabase = await assertAdmin(context);
-    const { data: result, error } = await supabase.rpc("signup_for_shift", {
+    const { data: result, error } = await supabase.rpc("admin_signup_for_shift", {
       _shift_id: data.shiftId,
       _employee_id: data.employeeId,
       _override: data.override,
     });
     if (error) return { status: "error" as const };
-    return { status: result as "ok" | "full" | "conflict" | "past" | "already" | "not_found" };
+    return { status: result as "ok" | "full" | "conflict" | "already" | "not_found" };
   });
 
 export const adminRemoveSignup = createServerFn({ method: "POST" })

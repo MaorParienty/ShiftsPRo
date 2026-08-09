@@ -142,6 +142,8 @@ function DaySheet({ date, onClose }: { date: string | null; onClose: () => void 
     onSuccess: (res) => {
       if (res.status === "ok") toast.success("ההרשמה בוטלה");
       else if (res.status === "started") toast.error("לא ניתן לבטל לאחר תחילת המשמרת");
+      else if (res.status === "too_close")
+        toast.error("לא ניתן לבטל הרשמה פחות מ-12 שעות לפני תחילת המשמרת");
       else toast.error("אירעה שגיאה");
       refresh();
     },
@@ -257,10 +259,10 @@ function DaySheet({ date, onClose }: { date: string | null; onClose: () => void 
                     <Button
                       variant="outline"
                       className="h-11 flex-1"
-                      disabled={busy}
+                      disabled={busy || s.cancelLocked}
                       onClick={() => cancel.mutate(s.id)}
                     >
-                      ביטול הרשמה
+                      {s.cancelLocked ? "לא ניתן לבטל (פחות מ-12 שעות)" : "ביטול הרשמה"}
                     </Button>
                   )}
 
